@@ -6,9 +6,11 @@ package wire
 
 import (
 	"bytes"
+        "encoding/binary"
 	"fmt"
 	"io"
 	"strconv"
+        "time"
 
 	"github.com/martinboehm/btcd/chaincfg/chainhash"
 )
@@ -288,6 +290,7 @@ func NewTxOut(value int64, pkScript []byte) *TxOut {
 // inputs and outputs.
 type MsgTx struct {
 	Version  int32
+	Time     time.Time
 	TxIn     []*TxIn
 	TxOut    []*TxOut
 	LockTime uint32
@@ -336,6 +339,7 @@ func (msg *MsgTx) Copy() *MsgTx {
 	// for the transaction inputs and outputs.
 	newTx := MsgTx{
 		Version:  msg.Version,
+                Time:     msg.Time,
 		TxIn:     make([]*TxIn, 0, len(msg.TxIn)),
 		TxOut:    make([]*TxOut, 0, len(msg.TxOut)),
 		LockTime: msg.LockTime,
@@ -409,11 +413,22 @@ func (msg *MsgTx) Copy() *MsgTx {
 // See Deserialize for decoding transactions stored to disk, such as in a
 // database, as opposed to decoding transactions from the wire.
 func (msg *MsgTx) BtcDecode(r io.Reader, pver uint32, enc MessageEncoding) error {
+        var buf [4]byte
+
 	version, err := binarySerializer.Uint32(r, littleEndian)
 	if err != nil {
 		return err
 	}
 	msg.Version = int32(version)
+
+        //////////////////////////////////////////
+	_, err = io.ReadFull(r, buf[:])
+	if err != nil {
+		return err
+	}
+	sec := binary.LittleEndian.Uint32(buf[:])
+	msg.Time = time.Unix(int64(sec), 0)
+        //////////////////////////////////////////
 
 	count, err := ReadVarInt(r, pver)
 	if err != nil {
@@ -679,10 +694,20 @@ func (msg *MsgTx) DeserializeNoWitness(r io.Reader) error {
 // See Serialize for encoding transactions to be stored to disk, such as in a
 // database, as opposed to encoding transactions for the wire.
 func (msg *MsgTx) BtcEncode(w io.Writer, pver uint32, enc MessageEncoding) error {
+        var buf [4]byte
+
 	err := binarySerializer.PutUint32(w, littleEndian, uint32(msg.Version))
 	if err != nil {
 		return err
 	}
+
+        //////////////////////////////////////////////////////////////
+	binary.LittleEndian.PutUint32(buf[:], uint32(msg.Time.Unix()))
+	_, err = w.Write(buf[:])
+	if err != nil {
+		return err
+	}
+        //////////////////////////////////////////////////////////////
 
 	// If the encoding version is set to WitnessEncoding, and the Flags
 	// field for the MsgTx aren't 0x00, then this indicates the transaction
@@ -789,7 +814,7 @@ func (msg *MsgTx) SerializeNoWitness(w io.Writer) error {
 func (msg *MsgTx) baseSize() int {
 	// Version 4 bytes + LockTime 4 bytes + Serialized varint size for the
 	// number of transaction inputs and outputs.
-	n := 8 + VarIntSerializeSize(uint64(len(msg.TxIn))) +
+	n := 12 + VarIntSerializeSize(uint64(len(msg.TxIn))) +
 		VarIntSerializeSize(uint64(len(msg.TxOut)))
 
 	for _, txIn := range msg.TxIn {
@@ -856,7 +881,7 @@ func (msg *MsgTx) PkScriptLocs() []int {
 	// Version 4 bytes + serialized varint size for the number of
 	// transaction inputs and outputs + serialized size of each transaction
 	// input.
-	n := 4 + VarIntSerializeSize(uint64(len(msg.TxIn))) +
+	n := 4 + 4 + VarIntSerializeSize(uint64(len(msg.TxIn))) +
 		VarIntSerializeSize(uint64(numTxOut))
 
 	// If this transaction has a witness input, the an additional two bytes
@@ -892,6 +917,7 @@ func (msg *MsgTx) PkScriptLocs() []int {
 func NewMsgTx(version int32) *MsgTx {
 	return &MsgTx{
 		Version: version,
+                Time:  time.Unix(time.Now().Unix(), 0),
 		TxIn:    make([]*TxIn, 0, defaultTxInOutAlloc),
 		TxOut:   make([]*TxOut, 0, defaultTxInOutAlloc),
 	}
